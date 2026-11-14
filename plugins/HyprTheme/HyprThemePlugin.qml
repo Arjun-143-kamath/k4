@@ -56,6 +56,8 @@ K4Plugin {
     readonly property string themeFile: hyprDir + "/config/k4-theme.lua"
     readonly property string entryFile: hyprDir + "/hyprland.lua"
     readonly property string stateFile: K4.Sistema.entorno("HOME") + "/.local/state/k4/hyprtheme.json"
+    readonly property string wallthemeStateFile:
+        K4.Sistema.entorno("HOME") + "/.local/state/walltheme/current_wallpaper"
 
     // ── ajustes ───────────────────────────────────────────────────
     property string preset: "cachyos"
@@ -114,23 +116,14 @@ K4Plugin {
     //  la IDENTIDAD de la property, así que tocando la de dentro el lienzo no
     //  se entera de nada.
     function ponerFondoEn(pantalla, ruta) {
-        if (!pantalla || pantalla.length === 0)
+        if (!ruta || String(ruta).length === 0)
             return
-        const d = ({})
-        for (const k in fondos)
-            d[k] = fondos[k]
-        //  Vacío es QUITAR la elección de esa pantalla, no guardar una cadena
-        //  vacía: `fondoDe` ya sabe volver al fondo común cuando no hay clave, y
-        //  una clave con "" dentro es un estado que no significa nada y que hay
-        //  que recordar filtrar en cada sitio que lea el mapa.
-        if (String(ruta || "").length === 0)
-            delete d[pantalla]
-        else
-            d[pantalla] = String(ruta)
-        fondos = d
-        saveState()
-        ponerSuelo()
-        sacarPaleta()
+
+        // Walltheme maintains one authoritative wallpaper.
+        // The K4 monitor selector therefore resolves to the
+        // same global wallpaper rather than maintaining a
+        // competing per-monitor desktop state.
+        setWallpaper(String(ruta))
     }
 
     // Marca de agua: los presets solo se ven "elegidos" mientras no toques nada.
@@ -385,14 +378,17 @@ K4Plugin {
 
     function loadState() {
         const raw = stateView.text()
-        if (raw.length === 0)
-            return
 
-        let s
-        try {
-            s = JSON.parse(raw)
-        } catch (e) {
-            return
+        // K4's own state is optional. Walltheme remains authoritative
+        // for the wallpaper even when K4 has never saved its own state.
+        let s = {}
+
+        if (raw.length > 0) {
+            try {
+                s = JSON.parse(raw)
+            } catch (e) {
+                s = {}
+            }
         }
 
         preset = s.preset !== undefined ? s.preset : preset
@@ -412,7 +408,12 @@ K4Plugin {
         shadow = s.shadow !== undefined ? s.shadow : shadow
         animEnabled = s.animEnabled !== undefined ? s.animEnabled : animEnabled
         animSpeed = s.animSpeed !== undefined ? s.animSpeed : animSpeed
-        wallpaper = s.wallpaper !== undefined ? s.wallpaper : wallpaper
+        const wallthemeWallpaper = String(wallthemeStateView.text() || "").trim()
+
+        if (wallthemeWallpaper.length > 0)
+            wallpaper = wallthemeWallpaper
+        else
+            wallpaper = s.wallpaper !== undefined ? s.wallpaper : wallpaper
         fondos = (s.fondos && typeof s.fondos === "object") ? s.fondos : ({})
         //  Comprobado contra la lista: un fichero a mano con cualquier otra cosa
         //  dejaría un efecto que no pinta nadie, o sea un cambio de fondo que se
@@ -621,18 +622,10 @@ K4Plugin {
     property string pantallaElegida: ""
 
     function ponerEnElegida(ruta) {
-        if (pantallaElegida.length > 0) {
-            ponerFondoEn(pantallaElegida, ruta)
+        if (!ruta || String(ruta).length === 0)
             return
-        }
-        //  Todas: el fondo común manda y las elecciones por pantalla estorban,
-        //  porque `fondoDe` las prefiere y el cambio no se vería en los
-        //  monitores que tuvieran una.
-        wallpaper = ruta
-        fondos = ({})
-        saveState()
-        ponerSuelo()
-        sacarPaleta()
+
+        setWallpaper(String(ruta))
     }
 
     //  ── el suelo ─────────────────────────────────────────────────
@@ -676,29 +669,10 @@ K4Plugin {
     function ponerSuelo() { esperaSuelo.restart() }
 
     function ponerSueloYa() {
-        const trozos = []
-        const pantallas = pantallasConocidas()
-        for (let i = 0; i < pantallas.length; ++i) {
-            const suelo = sueloDe(fondoDe(pantallas[i]))
-            if (suelo.length > 0)
-                trozos.push("-o " + JSON.stringify(pantallas[i])
-                            + " -i " + JSON.stringify(suelo) + " -m fill")
-        }
-        //  Y si el lienzo todavía no existe —al arrancar—, el de siempre para
-        //  todas, que es exactamente lo que hacía esto antes.
-        if (trozos.length === 0 && wallpaper.length > 0)
-            trozos.push("-i " + JSON.stringify(sueloDe(wallpaper)) + " -m fill")
-        if (trozos.length === 0)
-            return
-
-        //  `pkill -x`, nunca `-f`: con `-f` el patrón casa también con la línea
-        //  de esta misma orden y se mata a sí misma antes de llegar a swaybg.
-        //
-        //  Y con una espera corta antes de levantar el nuevo: matar no es
-        //  instantáneo, y arrancar mientras el viejo agoniza deja los dos.
-        K4.Sistema.lanzar(["sh", "-c",
-            "pkill -x swaybg 2>/dev/null; sleep 0.2; swaybg " + trozos.join(" ")
-            + " >/dev/null 2>&1 &"])
+        // Walltheme owns the persistent wallpaper layer.
+        // awww keeps the current wallpaper alive independently
+        // of the K4 Quickshell layer.
+        return
     }
 
     //  Qué imagen quieta representa a un fondo. Para una foto, ella misma; para
@@ -859,36 +833,31 @@ K4Plugin {
     }
 
     function applyWallpaper(path) {
-        if (path.length === 0 || wallTool.length === 0)
+        if (!path || String(path).length === 0)
             return false
 
-        if (wallTool === "swaybg") {
-            // swaybg no sabe recargar: se mata y se levanta otro.
-            K4.Sistema.lanzar(["sh", "-c",
-                "pkill -x swaybg 2>/dev/null || true; swaybg -i "
-                + JSON.stringify(path) + " -m fill >/dev/null 2>&1 &"])
-        } else {
-            // awww y swww aceptan la misma orden. Si el daemon aún no está
-            // levantado, se arranca y se reintenta la imagen.
-            K4.Sistema.lanzar(["sh", "-c",
-                wallTool + " img " + JSON.stringify(path)
-                + " --transition-type grow --transition-fps 60 >/dev/null 2>&1"
-                + " || { " + wallTool + "-daemon >/dev/null 2>&1 & sleep 1; "
-                + wallTool + " img " + JSON.stringify(path) + " >/dev/null 2>&1; }"])
-        }
+        // Walltheme owns wallpaper state, rendering, palette generation,
+        // presentation frames, Hyprlock, and SDDM synchronization.
+        K4.Sistema.lanzar([
+            "sh",
+            "-c",
+            "exec " + JSON.stringify(
+                K4.Sistema.entorno("HOME")
+                + "/.local/bin/set_wallpaper_from_path.sh"
+            ) + " " + JSON.stringify(String(path))
+        ])
+
         return true
     }
 
     function setWallpaper(path) {
-        if (path.length === 0)
+        if (!path || String(path).length === 0)
             return
 
-        // El clic es la acción completa: se actualiza la sesión y se escribe
-        // solo el estado del fondo inmediatamente, sin guardar de rebote otros
-        // retoques del tema. onWallToolChanged lo aplicará cuando esté listo.
-        wallpaper = path
+        wallpaper = String(path)
+        fondos = ({})
         saveState()
-        applyWallpaper(path)
+        applyWallpaper(wallpaper)
     }
 
     function refreshWallpapers() {
@@ -927,14 +896,17 @@ K4Plugin {
     //  El rastreo de fondos lo pide quien los enseña —la rejilla, al hacerse
     //  visible— y no un cambio de pestaña, que ya no existe. Aquí solo queda
     //  reaplicar si aparece la herramienta después del fondo.
-    onWallToolChanged: if (wallTool.length > 0 && wallpaper.length > 0)
-        applyWallpaper(wallpaper)
+    onWallToolChanged: {
+        // Walltheme owns wallpaper startup/application.
+        // K4 must not reapply its own persisted wallpaper here.
+    }
 
 
     // ── archivos ──────────────────────────────────────────────────
     K4.Fichero { id: themeView; path: self.themeFile }
     K4.Fichero { id: entryView; path: self.entryFile; blockLoading: true }
     K4.Fichero { id: stateView; path: self.stateFile; blockLoading: true }
+    K4.Fichero { id: wallthemeStateView; path: self.wallthemeStateFile; blockLoading: true }
 
     K4.Process { id: evalProcess }
 

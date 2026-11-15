@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import Quickshell.Services.UPower
 import "../../core"
 import "../../services"
 import "../../widgets"
@@ -129,6 +130,71 @@ FadeIn {
                     interactive: true
                     Layout.alignment: Qt.AlignVCenter
                     onMenuRequested: if (view.tray) view.tray.toggle()
+                }
+
+                // Battery indicator — rightmost item in the hover view.
+                RowLayout {
+                    id: bateriaPildora
+                    spacing: 5
+                    Layout.alignment: Qt.AlignVCenter
+
+                    readonly property var dispositivo: UPower.displayDevice
+
+                    readonly property int porcentaje: {
+                        if (!dispositivo || !dispositivo.ready)
+                            return -1
+
+                        const raw = Number(dispositivo.percentage)
+                        if (!isFinite(raw))
+                            return -1
+
+                        return Math.max(0, Math.min(100,
+                            Math.round(raw <= 1 ? raw * 100 : raw)))
+                    }
+
+                    readonly property bool cargando: dispositivo
+                        && (dispositivo.state === UPowerDeviceState.Charging
+                            || dispositivo.state === UPowerDeviceState.PendingCharge)
+
+                    readonly property color tinta: cargando ? Theme.green
+                        : porcentaje <= 15 ? Theme.red
+                        : porcentaje <= 30 ? Theme.yellow
+                        : Theme.muted
+
+                    visible: dispositivo && dispositivo.ready && porcentaje >= 0
+
+                    IconGlyph {
+                        text: {
+                            if (bateriaPildora.cargando)
+                                return String.fromCodePoint(0xF0084)
+
+                            const p = bateriaPildora.porcentaje
+                            if (p <= 5) return String.fromCodePoint(0xF0083)
+                            if (p <= 10) return String.fromCodePoint(0xF007A)
+                            if (p <= 20) return String.fromCodePoint(0xF007B)
+                            if (p <= 30) return String.fromCodePoint(0xF007C)
+                            if (p <= 40) return String.fromCodePoint(0xF007D)
+                            if (p <= 50) return String.fromCodePoint(0xF007E)
+                            if (p <= 60) return String.fromCodePoint(0xF007F)
+                            if (p <= 70) return String.fromCodePoint(0xF0080)
+                            if (p <= 80) return String.fromCodePoint(0xF0081)
+                            if (p <= 90) return String.fromCodePoint(0xF0082)
+
+                            return String.fromCodePoint(0xF0079)
+                        }
+
+                        color: bateriaPildora.tinta
+                        font.pixelSize: 14
+                        Layout.alignment: Qt.AlignVCenter
+                    }
+
+                    IslandLabel {
+                        text: bateriaPildora.porcentaje + "%"
+                        color: bateriaPildora.tinta
+                        font.pixelSize: 11
+                        font.weight: Font.Medium
+                        Layout.alignment: Qt.AlignVCenter
+                    }
                 }
             }
         }
